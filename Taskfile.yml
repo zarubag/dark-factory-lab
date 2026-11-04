@@ -1,0 +1,62 @@
+version: '3'
+
+# Steps that need packages (vet, golangci-lint, govulncheck, test, coverage)
+# print an explicit SKIP and pass only when `go list ./...` returns no
+# packages. A failing `go list` fails the step, so a broken module never
+# skips. Once the module has packages, the guard is inert.
+
+tasks:
+  gate:
+    desc: Run every check in order; stop at the first failure
+    cmds:
+      - go build ./...
+      - |
+        set -e
+        pkgs=$(go list ./...)
+        if [ -z "$pkgs" ]; then
+          echo "SKIP go vet: module has no packages yet"
+        else
+          go vet ./...
+        fi
+      - |
+        set -e
+        pkgs=$(go list ./...)
+        if [ -z "$pkgs" ]; then
+          echo "SKIP golangci-lint: module has no packages yet"
+        else
+          go tool golangci-lint run ./...
+        fi
+      - go tool staticcheck ./...
+      - |
+        set -e
+        pkgs=$(go list ./...)
+        if [ -z "$pkgs" ]; then
+          echo "SKIP govulncheck: module has no packages yet"
+        else
+          go tool govulncheck ./...
+        fi
+      - |
+        set -e
+        pkgs=$(go list ./...)
+        if [ -z "$pkgs" ]; then
+          echo "SKIP go test: module has no packages yet"
+        else
+          go test -race -coverprofile=cover.out ./...
+        fi
+      - |
+        set -e
+        pkgs=$(go list ./...)
+        if [ -z "$pkgs" ]; then
+          echo "COVERAGE: module has no packages yet, nothing to measure; passing"
+          exit 0
+        fi
+        go tool cover -func=cover.out | awk '
+          /^total:/ { total = $NF; sub(/%$/, "", total); got_total = 1; next }
+          /\.go:[0-9]+:/ { rows++ }
+          { print }
+          END {
+            if (!got_total) { print "COVERAGE: no total line in cover -func output"; exit 1 }
+            if (rows == 0) { print "COVERAGE: no statements yet (no functions in cover -func); passing"; exit 0 }
+            if (total + 0 < 90.0) { printf "COVERAGE: total %s%% is below the 90.0%% minimum\n", total; exit 1 }
+            printf "COVERAGE: total %s%% meets the 90.0%% minimum\n", total
+          }'
